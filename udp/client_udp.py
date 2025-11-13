@@ -1,98 +1,112 @@
 import socket
 import threading
 import sys
-import time
-import os
+import time # Necessário para o /bench
 
-HOST = '192.168.0.198'
+# Configurações - Seu IP Corrigido deve estar aqui
+HOST = '192.168.0.131' 
 PORT = 5001
-NICKNAME = 'ClienteUDP'
-SERVER_ADDR = (HOST, PORT)
 
-def receive(client_socket):
+client_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+NICKNAME = "Anônimo"
+
+def receive_messages_udp():
+    """Thread dedicada a receber datagramas do servidor."""
     while True:
         try:
-            data, addr = client_socket.recvfrom(1024)
-            message = data.decode('utf-8')
-            print(message)
+            message, server_addr = client_udp.recvfrom(1024) 
+            message_str = message.decode('utf-8')
             
-        except socket.timeout:
-            pass
-        except:
-            client_socket.close()
-            os._exit(0)
-
-def bench_test(client_socket, size_bytes):
-    try:
-        data_size = int(size_bytes)
-        
-        if data_size > 60000:
-             print("Aviso: O UDP pode limitar o tamanho do pacote (Max ~60KB por datagrama).")
-             
-        data = b'A' * data_size
-        
-        start_time = time.time()
-        
-        client_socket.sendto(f"/bench-data:{data_size}".encode('utf-8'), SERVER_ADDR) 
-        client_socket.sendto(data, SERVER_ADDR)
-        
-        end_time = time.time()
-        
-        total_time = end_time - start_time
-        data_mb = data_size / (1024 * 1024)
-        
-        print(f"\n--- TESTE DE DESEMPENHO UDP CONCLUÍDO ---")
-        print(f"Volume de dados: {data_mb:.2f} MB")
-        print(f"Tempo total de envio: {total_time:.4f} segundos")
-        print("------------------------------------------")
-
-    except ValueError:
-        print("Uso correto: /bench <bytes>")
-    except Exception as e:
-        print(f"Erro no teste de benchmark: {e}")
-
-
-def write(client_socket):
-    global NICKNAME
-    
-    client_socket.sendto(f"/nick {NICKNAME}".encode('utf-8'), SERVER_ADDR)
-    
-    while True:
-        try:
-            user_input = sys.stdin.readline().strip()
+            if not message:
+                continue 
             
-            if user_input.startswith('/nick '):
-                _, new_nick = user_input.split(' ', 1)
-                NICKNAME = new_nick
-                client_socket.sendto(user_input.encode('utf-8'), SERVER_ADDR)
-                
-            elif user_input == '/sair':
-                client_socket.sendto(user_input.encode('utf-8'), SERVER_ADDR)
-                client_socket.close()
-                print("[DESCONEXÃO INICIADA]")
-                os._exit(0)
-                
-            elif user_input.startswith('/bench '):
-                _, size_bytes = user_input.split(' ', 1)
-                bench_test(client_socket, size_bytes)
-                
-            else:
-                client_socket.sendto(user_input.encode('utf-8'), SERVER_ADDR)
-                
-        except:
+            if message_str.startswith("Seu nome agora é"):
+                global NICKNAME
+                try:
+                    novo_nome = message_str.split("'")[1] 
+                    NICKNAME = novo_nome
+                except:
+                    pass
+            
+            # IMPRESSÃO OTIMIZADA: Garante nova linha e reimprime o prompt
+            print(f"\n{message_str}")
+            sys.stdout.write(f"Você ({NICKNAME}): ")
+            sys.stdout.flush()
+
+        except Exception:
             break
 
 def main():
-    print(f"Iniciando Cliente UDP. Nick inicial: {NICKNAME}")
-    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    client.settimeout(0.1)
+    global NICKNAME
     
-    
-    receive_thread = threading.Thread(target=receive, args=(client,))
+    # Envia uma mensagem inicial para registrar o endereço no servidor
+    client_udp.sendto(f"/nick {NICKNAME}".encode('utf-8'), (HOST, PORT))
+    print(f"✅ Inicializado e registrado no Servidor UDP em {HOST}:{PORT}")
+
+    receive_thread = threading.Thread(target=receive_messages_udp)
+    receive_thread.daemon = True
     receive_thread.start()
 
-    write_thread = threading.Thread(target=write, args=(client,))
-    write_thread.start()
+    print("Digite mensagens ou comandos (ex: /nick MeuNome, /sair, /bench <bytes>)")
+    while True:
+        try:
+            user_input = input(f"Você ({NICKNAME}): ")
+            
+            if user_input.startswith('/'):
+                partes = user_input.split()
+                comando = partes[0]
+                
+                if comando == '/sair': # encerra a conexão [cite: 42]
+                    client_udp.sendto("/sair".encode('utf-8'), (HOST, PORT))
+                    client_udp.close()
+                    break
 
-if __name__ == '__main__':
+                elif comando == '/nick': # define o nome do cliente [cite: 41]
+                    if len(partes) > 1:
+                         client_udp.sendto(user_input.encode('utf-8'), (HOST, PORT))
+                    else:
+                         print("Uso: /nick <seu_nome>")
+
+                elif comando == '/bench':
+                    if len(partes) != 2:
+                        print("Uso: /bench <bytes>")
+                        continue
+                    try:
+                        bytes_to_send = int(partes[1])
+                    except ValueError:
+                        print("O argumento <bytes> deve ser um número inteiro.")
+                        continue
+                        
+                    MAX_DATAGRAM_SIZE = 1400 
+                    print(f"Iniciando benchmark UDP. Enviando {bytes_to_send} bytes...")
+
+                    data = b'A' * bytes_to_send 
+                    start_time = time.time()
+                    
+                    total_sent = 0
+                    while total_sent < bytes_to_send:
+                        chunk = data[total_sent:total_sent + MAX_DATAGRAM_SIZE]
+                        client_udp.sendto(chunk, (HOST, PORT))
+                        total_sent += len(chunk)
+
+                    elapsed_time = time.time() - start_time
+                    speed_mbps = (bytes_to_send / (1024 * 1024)) / elapsed_time if elapsed_time > 0 else 0
+
+                    print("-" * 30)
+                    print("✅ Benchmark UDP concluído.")
+                    print(f"Tempo total: {elapsed_time:.4f} segundos")
+                    print(f"Velocidade média: {speed_mbps:.2f} MB/s")
+                    print("-" * 30)
+
+                else:
+                    print(f"Comando desconhecido: {comando}")
+            
+            else:
+                if user_input.strip():
+                    client_udp.sendto(user_input.encode('utf-8'), (HOST, PORT))
+
+        except:
+            break
+
+if __name__ == "__main__":
     main()
